@@ -29,8 +29,8 @@ public sealed class TransactionRequest
 {
     public decimal Amount { get; set; }
     public EuroCaisseTransactionType Type { get; set; } = EuroCaisseTransactionType.Sale;
-    public string CurrencyCode { get; set; } = "978";
-    public int CurrencyDecimals { get; set; } = 2;
+    public string CurrencyCode { get; set; } = "434";  // LYD (ISO 4217 numeric)
+    public int CurrencyDecimals { get; set; } = 3;      // LYD minor unit = 3 decimals
     public string CashRegisterNumber { get; set; } = "01";
 
     /// <summary>IND — '0' no REP, '1' fixed REP (55), '2' TLV at end of response.</summary>
@@ -52,5 +52,5 @@ public sealed class TransactionRequest
     public string BuildPayload() => EuroCaisseMessage.EncodeRequest(this);
 
     public override string ToString() =>
-        $"{Type} {Amount:F2} {CurrencyCode} reg={CashRegisterNumber} IND={ResponseIndicator}";
+        $"{Type} {Amount:F3} {CurrencyCode} reg={CashRegisterNumber} IND={ResponseIndicator}";
 }

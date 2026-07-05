@@ -48,44 +48,41 @@ public static class EuroCaisseMessage
         return sb.ToString();
     }
 
+    // Fixed response header: ECR# STAT MNT MODE
+    public const int ResponseHeaderLen = RegisterIdLen + 1 + AmountLen + 1;
+
     public static TransactionResponse DecodeResponse(string payload)
     {
-        if (payload.Length < ResponseFixedWithoutRepLen)
+        if (payload.Length < ResponseHeaderLen)
             throw new FormatException(
-                $"Response too short ({payload.Length} chars, need at least {ResponseFixedWithoutRepLen}).");
+                $"Response too short ({payload.Length} chars, need at least {ResponseHeaderLen}).");
 
-        int pos = 0;
-        string register = payload.Substring(pos, RegisterIdLen);
-        pos += RegisterIdLen;
+        string register = payload.Substring(0, RegisterIdLen);
+        char status = payload[RegisterIdLen];
+        string amount = payload.Substring(RegisterIdLen + 1, AmountLen);
+        char mode = payload[RegisterIdLen + 1 + AmountLen];
 
-        char status = payload[pos++];
-        string amount = payload.Substring(pos, AmountLen);
-        pos += AmountLen;
+        // The terminal returns a tag-length-value stream after MODE, and on the
+        // observed CONCERT response the fixed DEV(3 digits)+PRIV(10) block sits
+        // at the very end. Strip that tail first, then scan the middle for TLVs.
+        int midStart = ResponseHeaderLen;
+        int midEnd = payload.Length;
+        string currency = "";
+        string priv = "";
 
-        char mode = payload[pos++];
-
-        string? rep = null;
-        int tailAfterMode = payload.Length - pos;
-        int fixedTail = CurrencyLen + PrivateLen;
-
-        // IND='1' layout: … MODE REP(55) DEV PRIV [TLV]
-        if (tailAfterMode >= RepFieldLen + fixedTail)
+        int tailLen = CurrencyLen + PrivateLen;
+        if (payload.Length - ResponseHeaderLen >= tailLen)
         {
-            rep = payload.Substring(pos, RepFieldLen);
-            pos += RepFieldLen;
+            string devCandidate = payload.Substring(payload.Length - tailLen, CurrencyLen);
+            if (devCandidate.All(char.IsDigit))
+            {
+                currency = devCandidate;
+                priv = payload[^PrivateLen..];
+                midEnd = payload.Length - tailLen;
+            }
         }
 
-        if (pos + fixedTail > payload.Length)
-            throw new FormatException($"Response truncated after MODE (at offset {pos}).");
-
-        string currency = payload.Substring(pos, CurrencyLen);
-        pos += CurrencyLen;
-        string priv = payload.Substring(pos, PrivateLen);
-        pos += PrivateLen;
-
-        EuroCaisseTlv? tlv = null;
-        if (pos < payload.Length)
-            tlv = EuroCaisseTlv.Decode(payload[pos..]);
+        EuroCaisseTlv tlv = ScanTlv(payload, midStart, midEnd);
 
         return new TransactionResponse
         {
@@ -94,11 +91,37 @@ public static class EuroCaisseMessage
             Status = status,
             AmountUnits = amount,
             PaymentMode = mode,
-            ResponseData = rep,
+            ResponseData = null,
             CurrencyCode = currency,
             PrivateData = priv,
             Tlv = tlv
         };
+    }
+
+    // Tolerant scan: a TLV is a letter tag + 2-digit length + value. Any byte
+    // that doesn't start a valid TLV (e.g. a stray separator) is skipped so one
+    // odd field can't abort the whole parse.
+    private static EuroCaisseTlv ScanTlv(string s, int start, int end)
+    {
+        var tlv = new EuroCaisseTlv();
+        int i = start;
+        while (i < end)
+        {
+            char tag = s[i];
+            if (char.IsLetter(tag) && i + 3 <= end
+                && char.IsDigit(s[i + 1]) && char.IsDigit(s[i + 2]))
+            {
+                int len = (s[i + 1] - '0') * 10 + (s[i + 2] - '0');
+                if (i + 3 + len <= end)
+                {
+                    tlv.Set(tag, s.Substring(i + 3, len));
+                    i += 3 + len;
+                    continue;
+                }
+            }
+            i++;
+        }
+        return tlv;
     }
 
     private static string NormalizeRegister(string id)

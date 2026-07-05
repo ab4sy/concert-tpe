@@ -16,10 +16,16 @@ public sealed class UsbSerialTransport : ITransport
     public UsbSerialTransport(string portName, int baudRate = 9600, TimeSpan? timeout = null)
     {
         _timeout = timeout ?? TimeSpan.FromSeconds(180);
+        // Per-byte read timeout is a short poll interval, NOT the application
+        // timeout: the link layer drives its own deadlines (ENQ/ACK retries,
+        // waiting for the card response). A byte that arrives sooner returns
+        // immediately, so this only bounds how fast a *missing* byte is noticed.
+        // Using the full 180 s here defeats the retry logic and hangs for
+        // minutes when the terminal doesn't answer the ENQ.
         _port = new SerialPort(portName, baudRate, Parity.Even, 7, StopBits.One)
         {
-            ReadTimeout = (int)_timeout.TotalMilliseconds,
-            WriteTimeout = (int)_timeout.TotalMilliseconds,
+            ReadTimeout = 500,
+            WriteTimeout = 2000,
             Handshake = Handshake.None,
             Encoding = Encoding.ASCII
         };

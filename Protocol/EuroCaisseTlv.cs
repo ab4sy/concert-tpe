@@ -20,6 +20,9 @@ public sealed class EuroCaisseTlv
         return hit == default ? null : hit.Value;
     }
 
+    /// <summary>All decoded TLV fields, in the order received.</summary>
+    public IReadOnlyList<(char Type, string Value)> Fields => _fields;
+
     public string Encode()
     {
         return string.Concat(_fields
