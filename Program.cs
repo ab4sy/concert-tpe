@@ -12,6 +12,8 @@ using CaisseApIpTester.Protocol;
 //   dotnet run -- --reg 02          set cash register number (default 01)
 //   dotnet run -- --refund          make the (one-shot or first) transaction a refund
 //   dotnet run -- --online          force an online authorization (AUTO=B011)
+//   dotnet run -- --ind 0           response indicator IND: 0 none, 1 fixed REP, 2 TLV (default)
+//   dotnet run -- --no-delay        omit the A010 answer-delay TLV
 //   dotnet run -- --list-ports
 
 var opts = args.ToList();
@@ -35,6 +37,8 @@ Console.WriteLine("╚═══════════════════�
 string cashReg = TakeOption(opts, "--reg") ?? "01";
 bool refund = opts.Remove("--refund");
 bool online = opts.Remove("--online");
+char ind = TakeOption(opts, "--ind") is [var c] && c is '0' or '1' or '2' ? c : '2';
+bool answerDelay = !opts.Remove("--no-delay");
 ITransport transport = BuildTransport(opts);
 
 // Any leftover non-flag token is a one-shot amount.
@@ -44,7 +48,7 @@ using (transport)
 {
     if (oneShotAmount != null)
     {
-        await TrySale(transport, oneShotAmount, refund, online, cashReg);
+        await TrySale(transport, oneShotAmount, refund, online, cashReg, ind, answerDelay);
         return;
     }
 
@@ -69,12 +73,12 @@ using (transport)
             line = line[2..].Trim();
         }
 
-        await TrySale(transport, line, isRefund, online, cashReg);
+        await TrySale(transport, line, isRefund, online, cashReg, ind, answerDelay);
         Console.WriteLine();
     }
 }
 
-static async Task TrySale(ITransport transport, string amountText, bool refund, bool online, string cashReg)
+static async Task TrySale(ITransport transport, string amountText, bool refund, bool online, string cashReg, char ind, bool answerDelay)
 {
     if (!decimal.TryParse(amountText,
             System.Globalization.NumberStyles.Any,
@@ -90,9 +94,9 @@ static async Task TrySale(ITransport transport, string amountText, bool refund, 
         Amount = amount,
         Type = refund ? EuroCaisseTransactionType.Refund : EuroCaisseTransactionType.Sale,
         CashRegisterNumber = cashReg,
-        ResponseIndicator = '2',
+        ResponseIndicator = ind,
         AnswerDelay = EuroCaisseAnswerDelay.EndOfTransaction,
-        IncludeAnswerDelayTlv = true,
+        IncludeAnswerDelayTlv = answerDelay,
         // --online forces the TPE to go online to the acquirer (AUTO TLV = B011),
         // which is what populates the authorization number (tag C) in the response.
         IncludeAuthorizationTlv = online,
@@ -103,6 +107,7 @@ static async Task TrySale(ITransport transport, string amountText, bool refund, 
     string label = (refund ? "REFUND" : "SALE") + (online ? " (online)" : "");
     Console.WriteLine($"→ {label} {amount:F3} LYD  (A4: {payload})");
 
+    var sw = System.Diagnostics.Stopwatch.StartNew();
     try
     {
         string raw = await transport.SendAsync(payload);
@@ -126,9 +131,11 @@ static async Task TrySale(ITransport transport, string amountText, bool refund, 
             Console.WriteLine("[parse] Raw payload is shown above — share it so the layout can be mapped.");
         }
     }
-    catch (OperationCanceledException)
+    catch (OperationCanceledException oce)
     {
-        Console.WriteLine("[ERR] Request timed out.");
+        // .NET SerialStream surfaces an aborted I/O (device unplugged / USB
+        // re-enumerated mid-wait) as OperationCanceledException, so show the detail.
+        Console.WriteLine($"[ERR] Request aborted after {sw.Elapsed.TotalSeconds:F1}s: {oce.Message}");
     }
     catch (Exception ex)
     {
@@ -199,6 +206,8 @@ static void PrintHelp()
     Console.WriteLine("  dotnet run -- --online 10.50    force online authorization (populates auth no.)");
     Console.WriteLine("  dotnet run -- --port COM5 --baud 1200");
     Console.WriteLine("  dotnet run -- --reg 02          cash register number (default 01)");
+    Console.WriteLine("  dotnet run -- --ind 0           response indicator: 0 none, 1 fixed REP, 2 TLV (default)");
+    Console.WriteLine("  dotnet run -- --no-delay        omit the A010 answer-delay TLV");
     Console.WriteLine("  dotnet run -- --list-ports");
 }
 

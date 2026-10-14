@@ -27,6 +27,10 @@ public sealed class UsbSerialTransport : ITransport
             ReadTimeout = 500,
             WriteTimeout = 2000,
             Handshake = Handshake.None,
+            // USB CDC-ACM terminals commonly hold their TX until the host raises
+            // DTR/RTS; asserting both is harmless on a 3-wire link.
+            DtrEnable = true,
+            RtsEnable = true,
             Encoding = Encoding.ASCII
         };
     }
@@ -54,19 +58,44 @@ public sealed class UsbSerialTransport : ITransport
         return response;
     }
 
+    // Set CONCERT_TRACE=1 to dump every byte on the wire (link-layer debugging).
+    private static readonly bool Trace =
+        Environment.GetEnvironmentVariable("CONCERT_TRACE") == "1";
+
+    private static void TraceByte(string dir, byte b)
+    {
+        if (!Trace) return;
+        string name = b switch
+        {
+            0x02 => "STX", 0x03 => "ETX", 0x04 => "EOT", 0x05 => "ENQ",
+            0x06 => "ACK", 0x15 => "NAK",
+            _ => b is >= 0x20 and < 0x7F ? ((char)b).ToString() : "?"
+        };
+        Console.WriteLine($"  [{dir} {DateTime.Now:HH:mm:ss.fff}] {b:X2} {name}");
+    }
+
     private byte ReadByte(CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
         int b = _port.BaseStream.ReadByte();
         if (b < 0)
             throw new EndOfStreamException("Serial port closed.");
+        TraceByte("RX", (byte)b);
         return (byte)b;
     }
 
-    private void WriteByte(byte b) => _port.BaseStream.WriteByte(b);
+    private void WriteByte(byte b)
+    {
+        TraceByte("TX", b);
+        _port.BaseStream.WriteByte(b);
+    }
 
-    private void WriteBuffer(byte[] buffer, int offset, int count) =>
+    private void WriteBuffer(byte[] buffer, int offset, int count)
+    {
+        if (Trace)
+            Console.WriteLine($"  [TX {DateTime.Now:HH:mm:ss.fff}] frame {Convert.ToHexString(buffer, offset, count)}");
         _port.BaseStream.Write(buffer, offset, count);
+    }
 
     public void Dispose()
     {

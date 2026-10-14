@@ -62,24 +62,23 @@ public static class EuroCaisseMessage
         string amount = payload.Substring(RegisterIdLen + 1, AmountLen);
         char mode = payload[RegisterIdLen + 1 + AmountLen];
 
-        // The terminal returns a tag-length-value stream after MODE, and on the
-        // observed CONCERT response the fixed DEV(3 digits)+PRIV(10) block sits
-        // at the very end. Strip that tail first, then scan the middle for TLVs.
+        // After MODE the terminal sends a tag-length-value stream, then a fixed
+        // trailer: DEV (3 digits) and, on some firmwares, PRIV (10 chars). The
+        // trailer is not a TLV, so find where the last well-formed TLV ends and
+        // treat whatever follows as DEV [+ PRIV] — this copes both with the older
+        // DEV+PRIV layout and with responses that carry DEV only (e.g. …Z08Purchase434).
         int midStart = ResponseHeaderLen;
         int midEnd = payload.Length;
         string currency = "";
         string priv = "";
 
-        int tailLen = CurrencyLen + PrivateLen;
-        if (payload.Length - ResponseHeaderLen >= tailLen)
+        int lastTlvEnd = FindLastTlvEnd(payload, midStart, payload.Length);
+        string trailer = payload[lastTlvEnd..];
+        if (trailer.Length >= CurrencyLen && trailer[..CurrencyLen].All(char.IsDigit))
         {
-            string devCandidate = payload.Substring(payload.Length - tailLen, CurrencyLen);
-            if (devCandidate.All(char.IsDigit))
-            {
-                currency = devCandidate;
-                priv = payload[^PrivateLen..];
-                midEnd = payload.Length - tailLen;
-            }
+            currency = trailer[..CurrencyLen];
+            priv = trailer.Length > CurrencyLen ? trailer[CurrencyLen..] : "";
+            midEnd = lastTlvEnd;
         }
 
         EuroCaisseTlv tlv = ScanTlv(payload, midStart, midEnd);
@@ -122,6 +121,31 @@ public static class EuroCaisseMessage
             i++;
         }
         return tlv;
+    }
+
+    // Same tolerant scan as ScanTlv, but returns the index just past the last
+    // well-formed TLV so the caller can peel off the trailing DEV[/PRIV] block.
+    // Stray bytes between TLVs are skipped, so they don't extend the boundary.
+    private static int FindLastTlvEnd(string s, int start, int end)
+    {
+        int i = start, lastEnd = start;
+        while (i < end)
+        {
+            char tag = s[i];
+            if (char.IsLetter(tag) && i + 3 <= end
+                && char.IsDigit(s[i + 1]) && char.IsDigit(s[i + 2]))
+            {
+                int len = (s[i + 1] - '0') * 10 + (s[i + 2] - '0');
+                if (i + 3 + len <= end)
+                {
+                    i += 3 + len;
+                    lastEnd = i;
+                    continue;
+                }
+            }
+            i++;
+        }
+        return lastEnd;
     }
 
     private static string NormalizeRegister(string id)

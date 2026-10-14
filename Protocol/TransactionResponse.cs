@@ -14,6 +14,18 @@ public sealed class TransactionResponse
     public string PrivateData { get; init; } = "";
     public EuroCaisseTlv? Tlv { get; init; }
 
+    // Retrieval reference number. The terminal returns it as TLV tag F followed by
+    // the RRN digits (e.g. F12123456789123 -> "123456789123"); the F marks
+    // transactions for which an RRN was returned. Null when absent or blank.
+    public string? Rrn
+    {
+        get
+        {
+            string? v = Tlv?.Get('F')?.Trim();
+            return string.IsNullOrEmpty(v) ? null : v;
+        }
+    }
+
     public bool IsAccepted => Status == '0';
     public bool IsNotCompleted => Status == '7';
     public bool IsRequestAccepted => Status == '9';
@@ -29,6 +41,7 @@ public sealed class TransactionResponse
         Console.WriteLine($"Status   (STAT): {Status} — {DescribeStatus(Status)}");
         Console.WriteLine($"Amount   (MNT) : {FormatAmount(AmountUnits)}");
         Console.WriteLine($"Mode     (MODE): {PaymentMode} — {DescribeIssuer(PaymentMode)}");
+        Console.WriteLine($"RRN      (F)   : {Rrn ?? "(none)"}");
 
         if (!string.IsNullOrEmpty(ResponseData))
             Console.WriteLine($"REP (55)      : '{ResponseData.TrimEnd()}'");
@@ -47,22 +60,30 @@ public sealed class TransactionResponse
         Console.WriteLine($"Raw payload   : {RawPayload}");
     }
 
-    // Best-effort labels per the repo's reading of CONCERT EURO/CAISSE ref. 095.
+    // CONCERT EURO/CAISSE ref. 095 §3.2 defines the card/cheque tags (A, C–G).
+    // On this terminal tag F carries the RRN (F + RRN, e.g. F123456789123), not
+    // the spec's cheque guarantor response.
+    // This terminal also appends an EMV/vendor set (M, T, I, S, V, B, R, N, Z),
+    // confirmed field-by-field against a real online sale response. Where the two
+    // collide the observed EMV meaning wins — e.g. B is TSI here, not card expiry.
     // Unknown types are still printed above with their raw letter + value.
-    // Standard tags per CONCERT ref. 095 §3.2 (response). A–G are spec-defined;
-    // anything else is a terminal/vendor extension (the spec list ends with "…").
     private static string DescribeTlv(char type) => type switch
     {
         'A' => "PAN (card number)",
-        'B' => "Card expiry (YYMM)",
         'C' => "Authorization number",
         'D' => "CMC7 track (cheque)",
         'E' => "FNCI response (cheque)",
-        'F' => "Guarantor response (cheque)",
+        'F' => "RRN (retrieval ref.)",
         'G' => "ISO2 track",
-        // Vendor tag confirmed empirically on this terminal (value matched the
-        // wall-clock time of an online attempt): YYMMDDHHMMSS.
-        'T' => "Date/time YYMMDDHHMMSS (vendor)",
+        'M' => "Amount (minor units)",
+        'T' => "Date/time YYMMDDHHMMSS",
+        'I' => "AID (application identifier)",
+        'S' => "TC (transaction cryptogram)",
+        'V' => "TVR (terminal verification results)",
+        'B' => "TSI (transaction status info)",
+        'R' => "Card type",
+        'N' => "Invoice number",
+        'Z' => "Transaction name",
         _ => "(non-standard / vendor-specific)"
     };
 
